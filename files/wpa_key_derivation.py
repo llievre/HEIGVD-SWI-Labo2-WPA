@@ -40,34 +40,32 @@ def customPRF512(key,A,B):
 # Read capture file -- it contains beacon, authentication, associacion, handshake and data
 wpa=rdpcap("wpa_handshake.cap") 
 
-packetBroadcast = wpa[0]
-packetAuth1 = wpa[1]
-packetHS1 = wpa[5]
-packetHS2 = wpa[6]
-
-packetHS2.show()
-
-print("7b3826876d14ff301aee7c1072b5e9091e21169841bce9ae8a3f24628f264577")
-print(len("7b3826876d14ff301aee7c1072b5e9091e21169841bce9ae8a3f24628f264577"))
+#get packets from list
+packetBroadcast = wpa[0] #beacon to find ssid
+packetHS1 = wpa[5] #handshake 1
+packetHS2 = wpa[6] #handshake 2
+packetHS4 = wpa[8] #handshake 4
 
 # Important parameters for key derivation - most of them can be obtained from the pcap file
 passPhrase  = "actuelle"
 A           = "Pairwise key expansion" #this string is used in the pseudo-random function
 ssid        = packetBroadcast.info.decode()
-APmac       = a2b_hex(packetBroadcast.addr2.replace(":", ""))
-Clientmac   = a2b_hex(packetAuth1.addr1.replace(":", ""))
+APmac       = a2b_hex(packetHS1.addr2.replace(":", "")) #on recupere la mac de l'ap dans le handshake 1
+Clientmac   = a2b_hex(packetHS1.addr1.replace(":", "")) #on recupere la mac du client dans le handshake 1
 
 # Authenticator and Supplicant Nonces
-ANonce      = packetHS1.load[13:45]
-SNonce      = packetHS2.load[13:45]
+ANonce      = packetHS1.load[13:45] #on trouve le ANonce dans le handshake 1
+SNonce      = Dot11Elt(packetHS2).load[65:97] #
 
 # This is the MIC contained in the 4th frame of the 4-way handshake
 # When attacking WPA, we would compare it to our own MIC calculated using passphrases from a dictionary
-mic_to_test = "36eef66540fa801ceee2fea9b7929b40"
+
+mic_to_test = Dot11Elt(packetHS4).load[129:-2].hex() #on trouve le mic dans le handshake 4
 
 B           = min(APmac,Clientmac)+max(APmac,Clientmac)+min(ANonce,SNonce)+max(ANonce,SNonce) #used in pseudo-random function
 
-data        = a2b_hex("0103005f02030a0000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000") #cf "Quelques détails importants" dans la donnée
+#on recupere la data dans le handshake 4 et on remplace le mic du payload par 0
+data        = a2b_hex(Dot11Elt(packetHS4).load[48:].hex().replace(mic_to_test, "0"*len(mic_to_test))) #cf "Quelques détails importants" dans la donnée
 
 print ("\n\nValues used to derivate keys")
 print ("============================")
